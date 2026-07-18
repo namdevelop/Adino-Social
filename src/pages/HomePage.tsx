@@ -4,7 +4,7 @@ import { useAuth } from '../lib/auth';
 import { ROLE_COLORS } from '../lib/roles';
 import type { Profile, Post, Comment } from '../lib/types';
 import Avatar from '../components/Avatar';
-import { Loader2, Heart, MessageSquare, Send, Trash2, ImagePlus, X, Sparkles, Info } from 'lucide-react';
+import { Loader2, Heart, MessageSquare, Send, Trash2, ImagePlus, X, Sparkles, Info, Lock } from 'lucide-react';
 
 export default function HomePage() {
   const { profile } = useAuth();
@@ -19,6 +19,8 @@ export default function HomePage() {
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
   const [commentsByPost, setCommentsByPost] = useState<Record<string, Comment[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+
+  const isSlave = profile?.role === 'Nô lệ';
 
   const fetchProfiles = useCallback(async (ids: string[]) => {
     const missing = ids.filter((id) => !profileCache[id]);
@@ -79,6 +81,7 @@ export default function HomePage() {
   }, [loadPosts]);
 
   const submitPost = async () => {
+    if (isSlave) return;
     if (!content.trim() || !profile || posting) return;
     setPosting(true);
     const { data } = await supabase.from('posts').insert({
@@ -126,6 +129,7 @@ export default function HomePage() {
   };
 
   const submitComment = async (postId: string) => {
+    if (isSlave) return;
     const text = commentInputs[postId]?.trim();
     if (!text || !profile) return;
     const { data } = await supabase.from('comments').insert({
@@ -141,7 +145,14 @@ export default function HomePage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
       <div className="anime-card rounded-2xl p-5 mb-6">
-        {!composing ? (
+        {isSlave ? (
+          <div className="w-full flex items-center gap-3">
+            <Avatar profile={profile} size={40} />
+            <div className="flex-1 flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-400 text-sm">
+              <Lock className="w-4 h-4 shrink-0" /> Cấp bậc "Nô lệ" không được phép đăng bài.
+            </div>
+          </div>
+        ) : !composing ? (
           <button onClick={() => setComposing(true)} className="w-full flex items-center gap-3 text-left">
             <Avatar profile={profile} size={40} />
             <div className="flex-1 px-4 py-3 rounded-xl bg-pink-100/50 dark:bg-white/5 text-slate-400 dark:text-fuchsia-200/40 text-sm hover:bg-pink-100 dark:hover:bg-white/10 transition-colors">
@@ -252,19 +263,26 @@ export default function HomePage() {
                         </div>
                       );
                     })}
-                    <div className="flex items-center gap-2">
-                      <Avatar profile={profile} size={28} />
-                      <input
-                        value={commentInputs[post.id] ?? ''}
-                        onChange={(e) => setCommentInputs((prev) => ({ ...prev, [post.id]: e.target.value }))}
-                        onKeyDown={(e) => e.key === 'Enter' && submitComment(post.id)}
-                        placeholder="Viết bình luận..."
-                        className="flex-1 px-3 py-2 rounded-xl bg-pink-100/50 dark:bg-white/5 border border-pink-200/50 dark:border-fuchsia-500/15 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm transition-all"
-                      />
-                      <button onClick={() => submitComment(post.id)} className="text-pink-500 hover:text-pink-600 transition-colors">
-                        <Send className="w-4 h-4" />
-                      </button>
-                    </div>
+
+                    {isSlave ? (
+                      <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs text-slate-400">
+                        <Lock className="w-3.5 h-3.5 shrink-0" /> Cấp bậc "Nô lệ" không được phép bình luận.
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <Avatar profile={profile} size={28} />
+                        <input
+                          value={commentInputs[post.id] ?? ''}
+                          onChange={(e) => setCommentInputs((prev) => ({ ...prev, [post.id]: e.target.value }))}
+                          onKeyDown={(e) => e.key === 'Enter' && submitComment(post.id)}
+                          placeholder="Viết bình luận..."
+                          className="flex-1 px-3 py-2 rounded-xl bg-pink-100/50 dark:bg-white/5 border border-pink-200/50 dark:border-fuchsia-500/15 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm transition-all"
+                        />
+                        <button onClick={() => submitComment(post.id)} className="text-pink-500 hover:text-pink-600 transition-colors">
+                          <Send className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -277,7 +295,7 @@ export default function HomePage() {
         <Info className="w-5 h-5 text-cyan-500 shrink-0 mt-0.5" />
         <div>
           <p className="text-sm text-slate-600 dark:text-fuchsia-200/60 font-medium mb-1">Cấp bậc trong cộng đồng</p>
-          <p className="text-xs text-slate-400">Thành viên → Kiểm duyệt viên → Phó Admin → Admin → Sáng lập viên. Tích cực đăng bài & tương tác để được thăng cấp!</p>
+          <p className="text-xs text-slate-400">Nô lệ → Thành viên → Kiểm duyệt viên → Phó Admin → Admin → Sáng lập viên. Tích cực đăng bài & tương tác để được thăng cấp!</p>
         </div>
       </div>
     </div>

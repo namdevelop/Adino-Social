@@ -225,7 +225,7 @@ export default function ChatPage() {
                   <Avatar profile={sender ?? null} size={32} />
                   <div className={`max-w-[75%] group ${isMe ? 'text-right' : ''}`}>
                     <div className="flex items-center gap-2 mb-0.5">
-                      {!isMe && <span className={`text-xs font-medium ${colors.text}`}>{sender?.username ?? 'Unknown'}</span>}
+                      <span className={`text-xs font-medium ${colors.text}`}>{sender?.username ?? (isMe ? profile?.username : null) ?? 'Unknown'}</span>
                       <span className="text-xs text-slate-400">{new Date(msg.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                     <div className={`inline-block px-3.5 py-2 rounded-2xl text-sm ${isMe ? 'anime-btn-primary text-white rounded-tr-md' : 'bg-pink-100/60 dark:bg-white/5 text-slate-700 dark:text-fuchsia-100/80 rounded-tl-md'}`}>

@@ -2,7 +2,7 @@ import { useAuth } from '../lib/auth';
 import { useTheme } from '../lib/theme';
 import { ROLE_COLORS, canManageUsers } from '../lib/roles';
 import Avatar from './Avatar';
-import { Home, Users, User, LogOut, Sparkles, X, MessageCircle, Shield, Sun, Moon } from 'lucide-react';
+import { Home, Users, User, LogOut, Sparkles, X, MessageCircle, Shield, Sun, Moon, Coins, Store, ListChecks } from 'lucide-react';
 import type { Page } from '../App';
 
 export default function Sidebar({
@@ -21,6 +21,9 @@ export default function Sidebar({
     { page: 'home', label: 'Trang chủ', icon: Home },
     { page: 'chat', label: 'Chat', icon: MessageCircle },
     { page: 'members', label: 'Thành viên', icon: Users },
+    { page: 'shop', label: 'Khu bán hàng', icon: Store },
+    { page: 'tasks', label: 'Nhiệm vụ', icon: ListChecks },
+    { page: 'topup', label: 'Nạp tiền', icon: Coins },
     { page: 'profile', label: 'Hồ sơ', icon: User },
   ];
 
@@ -35,7 +38,7 @@ export default function Sidebar({
             <div className="w-9 h-9 rounded-xl anime-btn-primary flex items-center justify-center anime-glow-pink">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
-            <span className="font-bold anime-text-gradient text-lg">Adino social</span>
+            <span className="font-bold anime-text-gradient text-lg">Adino Social</span>
           </div>
           <button onClick={onClose} className="lg:hidden text-slate-400 hover:text-pink-500">
             <X className="w-5 h-5" />
@@ -91,7 +94,12 @@ export default function Sidebar({
             <Avatar profile={profile} size={40} showBadge />
             <div className="min-w-0 flex-1">
               <p className="text-slate-800 dark:text-white font-medium text-sm truncate">{profile?.username}</p>
-              <span className={`inline-block text-xs px-2 py-0.5 rounded-full ${colors.badge}`}>{profile?.role}</span>
+              <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                <span className={`inline-block text-xs px-2 py-0.5 rounded-full ${colors.badge}`}>{profile?.role}</span>
+                <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 font-medium">
+                  <Coins className="w-3 h-3" /> {(profile?.coins ?? 0).toLocaleString('vi-VN')}
+                </span>
+              </div>
             </div>
             <button onClick={signOut} className="text-slate-400 hover:text-rose-400 transition-colors p-2" title="Đăng xuất">
               <LogOut className="w-4 h-4" />

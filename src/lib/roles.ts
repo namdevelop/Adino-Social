@@ -30,6 +30,17 @@ export function canBanUsers(role: string): boolean {
   return ROLE_RANK[role] >= ROLE_RANK['Phó Admin'];
 }
 
+// Kiểm duyệt viên trở lên mới được đăng bán hàng trong Khu bán hàng
+export function canSell(role: string): boolean {
+  return ROLE_RANK[role] >= ROLE_RANK['Kiểm duyệt viên'];
+}
+
+// CHỈ Sáng lập viên mới được quản lý phần Nạp tiền (đơn nạp, gói nạp,
+// giá cấp bậc, thông tin ngân hàng) trong Bảng quản trị
+export function canManageTopup(role: string): boolean {
+  return role === 'Sáng lập viên';
+}
+
 export const MUTE_DURATION_MS = 60 * 60 * 1000; // 60 phút
 
 export function isUserMuted(mutedUntil: string | null | undefined): boolean {

@@ -3,17 +3,30 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 import {
   ROLE_COLORS, ROLE_RANK, ALL_ROLES, canManageUsers,
-  canMuteUsers, isUserMuted, muteRemainingMinutes, MUTE_DURATION_MS, canBanUsers,
+  canMuteUsers, isUserMuted, muteRemainingMinutes, MUTE_DURATION_MS, canBanUsers, canManageTopup,
 } from '../lib/roles';
-import type { Profile, Post, Announcement } from '../lib/types';
 import { listAnnouncements, createAnnouncement, deleteAnnouncement } from '../lib/announcements';
+import { setMaintenanceMode, updateBankSettings } from '../lib/settings';
+import {
+  listCoinPackages, createCoinPackage, updateCoinPackage, deleteCoinPackage,
+  listAllOrders, adminCompleteOrder, adminCancelOrder,
+  listRolePrices, upsertRolePrice, deleteRolePrice, orderMemo,
+} from '../lib/topup';
+import {
+  listAllShopListings, deleteListing as deleteShopListing,
+  adminApproveListing, adminRejectListing, listAllOrdersForAdmin,
+} from '../lib/shop';
+import {
+  listAllTasksAdmin, createTask, updateTask, deleteTask,
+} from '../lib/tasks';
+import type { Profile, Post, Announcement, CoinPackage, TopupOrder, RolePrice, ShopListing, ShopOrder, Task } from '../lib/types';
 import Avatar from '../components/Avatar';
-import { Shield, Users, FileText, MessageSquare, Heart, Trash2, Search, Loader2, AlertCircle, BarChart3, VolumeX, Volume2, MessagesSquare, Megaphone, ShieldOff, ShieldCheck } from 'lucide-react';
+import { Shield, Users, FileText, MessageSquare, Heart, Trash2, Search, Loader2, AlertCircle, BarChart3, VolumeX, Volume2, MessagesSquare, Megaphone, ShieldOff, ShieldCheck, Wrench, Coins, Plus, Check, X as XIcon, Clock, CheckCircle2, XCircle, Landmark, Store, Lock, ShoppingCart, ListChecks, ExternalLink } from 'lucide-react';
 
-type Tab = 'dashboard' | 'users' | 'posts' | 'chat' | 'announcements';
+type Tab = 'dashboard' | 'users' | 'posts' | 'chat' | 'announcements' | 'maintenance' | 'topup' | 'shop' | 'tasks';
 
 export default function AdminPage() {
-  const { profile } = useAuth();
+  const { profile, maintenance } = useAuth();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [members, setMembers] = useState<Profile[]>([]);
   const [posts, setPosts] = useState<(Post & { like_count: number; comment_count: number })[]>([]);
@@ -23,6 +36,7 @@ export default function AdminPage() {
   const [mutingId, setMutingId] = useState<string | null>(null);
   const [banningId, setBanningId] = useState<string | null>(null);
   const [usersActionMsg, setUsersActionMsg] = useState('');
+  const [postsActionMsg, setPostsActionMsg] = useState('');
   const [deleteBefore, setDeleteBefore] = useState('');
   const [deletingMessages, setDeletingMessages] = useState<'all' | 'before' | null>(null);
   const [chatActionMsg, setChatActionMsg] = useState('');
@@ -32,10 +46,45 @@ export default function AdminPage() {
   const [posting, setPosting] = useState(false);
   const [annError, setAnnError] = useState('');
   const [deletingAnnId, setDeletingAnnId] = useState<string | null>(null);
+  const [maintEnabled, setMaintEnabled] = useState(false);
+  const [maintMessage, setMaintMessage] = useState('');
+  const [savingMaint, setSavingMaint] = useState(false);
+  const [maintActionMsg, setMaintActionMsg] = useState('');
+  const [coinPackages, setCoinPackages] = useState<CoinPackage[]>([]);
+  const [orders, setOrders] = useState<TopupOrder[]>([]);
+  const [rolePrices, setRolePrices] = useState<RolePrice[]>([]);
+  const [topupTab, setTopupTab] = useState<'orders' | 'packages' | 'prices' | 'bank'>('orders');
+  const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
+  const [topupMsg, setTopupMsg] = useState('');
+  const [newPkgName, setNewPkgName] = useState('');
+  const [newPkgAmount, setNewPkgAmount] = useState('');
+  const [newPkgCoins, setNewPkgCoins] = useState('');
+  const [savingPkg, setSavingPkg] = useState(false);
+  const [newPriceRole, setNewPriceRole] = useState('');
+  const [newPriceCost, setNewPriceCost] = useState('');
+  const [savingPrice, setSavingPrice] = useState(false);
+  const [bankBin, setBankBin] = useState('');
+  const [bankAccountNo, setBankAccountNo] = useState('');
+  const [bankAccountName, setBankAccountName] = useState('');
+  const [savingBank, setSavingBank] = useState(false);
+  const [shopListings, setShopListings] = useState<ShopListing[]>([]);
+  const [shopActionMsg, setShopActionMsg] = useState('');
+  const [removingListingId, setRemovingListingId] = useState<string | null>(null);
+  const [shopSubTab, setShopSubTab] = useState<'pending' | 'listings' | 'history'>('pending');
+  const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
+  const [reviewingListingId, setReviewingListingId] = useState<string | null>(null);
+  const [taskList, setTaskList] = useState<Task[]>([]);
+  const [taskActionMsg, setTaskActionMsg] = useState('');
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [newTaskLink, setNewTaskLink] = useState('');
+  const [newTaskReward, setNewTaskReward] = useState('10');
+  const [savingTask, setSavingTask] = useState(false);
 
   const canAccess = profile && canManageUsers(profile.role);
   const canMute = profile && canMuteUsers(profile.role);
   const canBan = profile && canBanUsers(profile.role);
+  const canTopup = profile && canManageTopup(profile.role);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -53,11 +102,107 @@ export default function AdminPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    if (maintenance) {
+      setMaintEnabled(maintenance.maintenance_mode);
+      setMaintMessage(maintenance.maintenance_message ?? '');
+      setBankBin(maintenance.bank_bin ?? '');
+      setBankAccountNo(maintenance.bank_account_no ?? '');
+      setBankAccountName(maintenance.bank_account_name ?? '');
+    }
+  }, [maintenance]);
+
+  const loadTopupData = useCallback(async () => {
+    if (!canTopup) return;
+    try {
+      const [pkgs, allOrders, prices] = await Promise.all([
+        listCoinPackages(false),
+        listAllOrders(),
+        listRolePrices(),
+      ]);
+      setCoinPackages(pkgs);
+      setOrders(allOrders);
+      setRolePrices(prices);
+    } catch {
+      // im lặng, tab sẽ hiện danh sách rỗng
+    }
+  }, [canTopup]);
+
+  const loadShopData = useCallback(async () => {
+    try {
+      const [all, allOrders] = await Promise.all([listAllShopListings(), listAllOrdersForAdmin()]);
+      setShopListings(all);
+      setShopOrders(allOrders);
+    } catch {
+      // im lặng
+    }
+  }, []);
+
+  const loadTaskData = useCallback(async () => {
+    try {
+      const t = await listAllTasksAdmin();
+      setTaskList(t);
+    } catch {
+      // im lặng
+    }
+  }, []);
+
+  // TẢI DỮ LIỆU LƯỜI (lazy): chỉ gọi API cho đúng tab đang mở, lần đầu tiên
+  // ghé qua tab đó — không tải sẵn dữ liệu của cả 9 tab cùng lúc lúc vào trang,
+  // giúp Bảng quản trị mở nhanh hơn nhiều.
+  const [loadedTabs, setLoadedTabs] = useState<Set<Tab>>(new Set());
+  const markLoaded = (t: Tab) => setLoadedTabs((prev) => new Set(prev).add(t));
 
   useEffect(() => {
-    listAnnouncements().then(setAnnouncements).catch(() => {});
-  }, []);
+    const needsCore = tab === 'dashboard' || tab === 'users' || tab === 'posts';
+    if (needsCore && !loadedTabs.has('dashboard')) {
+      loadData();
+      markLoaded('dashboard');
+    } else if (tab === 'announcements' && !loadedTabs.has('announcements')) {
+      listAnnouncements().then(setAnnouncements).catch(() => {});
+      markLoaded('announcements');
+    } else if (tab === 'topup' && canTopup && !loadedTabs.has('topup')) {
+      loadTopupData();
+      markLoaded('topup');
+    } else if (tab === 'shop' && !loadedTabs.has('shop')) {
+      loadShopData();
+      markLoaded('shop');
+    } else if (tab === 'tasks' && !loadedTabs.has('tasks')) {
+      loadTaskData();
+      markLoaded('tasks');
+    }
+  }, [tab, loadedTabs, canTopup, loadData, loadTopupData, loadShopData, loadTaskData]);
+
+  // Realtime: chỉ mở kênh lắng nghe SAU KHI đã ghé qua tab đó ít nhất 1 lần
+  // (đỡ mở hàng loạt kết nối realtime ngay khi vừa vào trang).
+  useEffect(() => {
+    if (!canTopup || !loadedTabs.has('topup')) return;
+    const channel = supabase
+      .channel('admin-topup-orders-realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'topup_orders' }, () => loadTopupData())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'topup_orders' }, () => loadTopupData())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [loadTopupData, canTopup, loadedTabs]);
+
+  useEffect(() => {
+    if (!loadedTabs.has('shop')) return;
+    const channel = supabase
+      .channel('admin-shop-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shop_listings' }, () => loadShopData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shop_orders' }, () => loadShopData())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [loadShopData, loadedTabs]);
+
+  useEffect(() => {
+    if (!loadedTabs.has('tasks')) return;
+    const channel = supabase
+      .channel('admin-tasks-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => loadTaskData())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [loadTaskData, loadedTabs]);
 
   // Cập nhật lại giao diện mỗi 30s để đồng hồ đếm ngược "còn X phút" luôn đúng
   // và tự động ẩn trạng thái mute khi hết hạn (không cần thao tác gì thêm).
@@ -169,10 +314,232 @@ export default function AdminPage() {
     setBanningId(null);
   };
 
+  const saveMaintenance = async () => {
+    if (!profile || savingMaint) return;
+    setSavingMaint(true);
+    setMaintActionMsg('');
+    try {
+      await setMaintenanceMode(maintEnabled, maintMessage, profile.id);
+      setMaintActionMsg(maintEnabled ? 'Đã BẬT chế độ bảo trì.' : 'Đã TẮT chế độ bảo trì.');
+    } catch (err) {
+      setMaintActionMsg(err instanceof Error ? err.message : 'Không thể lưu cài đặt bảo trì.');
+    } finally {
+      setSavingMaint(false);
+    }
+  };
+
+  const confirmOrder = async (orderId: string) => {
+    setProcessingOrderId(orderId);
+    setTopupMsg('');
+    try {
+      await adminCompleteOrder(orderId);
+      setTopupMsg('Đã xác nhận và cộng coin cho người dùng.');
+      await loadTopupData();
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể xác nhận đơn.');
+    } finally {
+      setProcessingOrderId(null);
+    }
+  };
+
+  const cancelOrder = async (orderId: string) => {
+    if (!confirm('Huỷ đơn nạp tiền này? Người dùng sẽ không nhận được coin.')) return;
+    setProcessingOrderId(orderId);
+    setTopupMsg('');
+    try {
+      await adminCancelOrder(orderId);
+      setTopupMsg('Đã huỷ đơn.');
+      await loadTopupData();
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể huỷ đơn.');
+    } finally {
+      setProcessingOrderId(null);
+    }
+  };
+
+  const addPackage = async () => {
+    const amount = parseInt(newPkgAmount, 10);
+    const coins = parseInt(newPkgCoins, 10);
+    if (!newPkgName.trim() || !amount || !coins || savingPkg) return;
+    setSavingPkg(true);
+    setTopupMsg('');
+    try {
+      const pkg = await createCoinPackage({ name: newPkgName.trim(), amount_vnd: amount, coins, sort_order: coinPackages.length });
+      setCoinPackages((prev) => [...prev, pkg]);
+      setNewPkgName(''); setNewPkgAmount(''); setNewPkgCoins('');
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể tạo gói nạp.');
+    } finally {
+      setSavingPkg(false);
+    }
+  };
+
+  const togglePackageActive = async (pkg: CoinPackage) => {
+    try {
+      const updated = await updateCoinPackage(pkg.id, { active: !pkg.active });
+      setCoinPackages((prev) => prev.map((p) => (p.id === pkg.id ? updated : p)));
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể cập nhật gói nạp.');
+    }
+  };
+
+  const removePackage = async (id: string) => {
+    if (!confirm('Xoá gói nạp này?')) return;
+    try {
+      await deleteCoinPackage(id);
+      setCoinPackages((prev) => prev.filter((p) => p.id !== id));
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể xoá gói nạp.');
+    }
+  };
+
+  const addOrUpdatePrice = async () => {
+    const cost = parseInt(newPriceCost, 10);
+    if (!newPriceRole || !cost || savingPrice) return;
+    setSavingPrice(true);
+    setTopupMsg('');
+    try {
+      const price = await upsertRolePrice(newPriceRole, cost, true);
+      setRolePrices((prev) => {
+        const exists = prev.some((rp) => rp.role === price.role);
+        return exists ? prev.map((rp) => (rp.role === price.role ? price : rp)) : [...prev, price];
+      });
+      setNewPriceRole(''); setNewPriceCost('');
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể lưu giá cấp bậc.');
+    } finally {
+      setSavingPrice(false);
+    }
+  };
+
+  const togglePriceEnabled = async (rp: RolePrice) => {
+    try {
+      const updated = await upsertRolePrice(rp.role, rp.coin_cost, !rp.enabled);
+      setRolePrices((prev) => prev.map((p) => (p.role === rp.role ? updated : p)));
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể cập nhật.');
+    }
+  };
+
+  const removePrice = async (role: string) => {
+    if (!confirm(`Ngừng bán cấp bậc "${role}" bằng coin?`)) return;
+    try {
+      await deleteRolePrice(role);
+      setRolePrices((prev) => prev.filter((rp) => rp.role !== role));
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể xoá.');
+    }
+  };
+
+  const saveBank = async () => {
+    if (!profile || savingBank) return;
+    setSavingBank(true);
+    setTopupMsg('');
+    try {
+      await updateBankSettings(bankBin, bankAccountNo, bankAccountName, profile.id);
+      setTopupMsg('Đã lưu thông tin ngân hàng.');
+    } catch (err) {
+      setTopupMsg(err instanceof Error ? err.message : 'Không thể lưu thông tin ngân hàng.');
+    } finally {
+      setSavingBank(false);
+    }
+  };
+
+  const removeListing = async (id: string) => {
+    if (!confirm('Xoá tin đăng này khỏi Khu bán hàng?')) return;
+    setRemovingListingId(id);
+    setShopActionMsg('');
+    try {
+      await deleteShopListing(id);
+      setShopListings((prev) => prev.filter((l) => l.id !== id));
+      setShopActionMsg('Đã xoá tin đăng.');
+    } catch (err) {
+      setShopActionMsg(err instanceof Error ? err.message : 'Không thể xoá tin đăng.');
+    } finally {
+      setRemovingListingId(null);
+    }
+  };
+
+  const approveListingItem = async (listingId: string) => {
+    setReviewingListingId(listingId);
+    setShopActionMsg('');
+    try {
+      await adminApproveListing(listingId);
+      setShopActionMsg('Đã duyệt tin đăng — tin đã hiện công khai cho người mua.');
+      await loadShopData();
+    } catch (err) {
+      setShopActionMsg(err instanceof Error ? err.message : 'Không thể duyệt tin đăng.');
+    } finally {
+      setReviewingListingId(null);
+    }
+  };
+
+  const rejectListingItem = async (listingId: string) => {
+    if (!confirm('Từ chối tin đăng này? Phí đăng 10 coin đã trả sẽ không được hoàn lại.')) return;
+    setReviewingListingId(listingId);
+    setShopActionMsg('');
+    try {
+      await adminRejectListing(listingId);
+      setShopActionMsg('Đã từ chối tin đăng.');
+      await loadShopData();
+    } catch (err) {
+      setShopActionMsg(err instanceof Error ? err.message : 'Không thể từ chối tin đăng.');
+    } finally {
+      setReviewingListingId(null);
+    }
+  };
+
+  const addTask = async () => {
+    const reward = parseInt(newTaskReward, 10);
+    if (!newTaskTitle.trim() || !newTaskLink.trim() || !reward || savingTask) return;
+    setSavingTask(true);
+    setTaskActionMsg('');
+    try {
+      const t = await createTask({ title: newTaskTitle, description: newTaskDesc, link: newTaskLink, rewardCoin: reward });
+      setTaskList((prev) => [t, ...prev]);
+      setNewTaskTitle(''); setNewTaskDesc(''); setNewTaskLink(''); setNewTaskReward('10');
+    } catch (err) {
+      setTaskActionMsg(err instanceof Error ? err.message : 'Không thể tạo nhiệm vụ.');
+    } finally {
+      setSavingTask(false);
+    }
+  };
+
+  const toggleTaskActive = async (task: Task) => {
+    try {
+      const updated = await updateTask(task.id, { active: !task.active });
+      setTaskList((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+    } catch (err) {
+      setTaskActionMsg(err instanceof Error ? err.message : 'Không thể cập nhật nhiệm vụ.');
+    }
+  };
+
+  const removeTask = async (id: string) => {
+    if (!confirm('Xoá nhiệm vụ này?')) return;
+    try {
+      await deleteTask(id);
+      setTaskList((prev) => prev.filter((t) => t.id !== id));
+    } catch (err) {
+      setTaskActionMsg(err instanceof Error ? err.message : 'Không thể xoá nhiệm vụ.');
+    }
+  };
+
   const deletePost = async (id: string) => {
-    await supabase.from('posts').delete().eq('id', id);
+    const prevPosts = posts;
+    const prevStats = stats;
+    setPostsActionMsg('');
     setPosts(posts.filter((p) => p.id !== id));
     setStats((s) => ({ ...s, posts: s.posts - 1 }));
+    const { data, error } = await supabase.from('posts').delete().eq('id', id).select('id');
+    if (error || !data || data.length === 0) {
+      setPosts(prevPosts); // hoàn tác giao diện vì xoá thực tế thất bại
+      setStats(prevStats);
+      setPostsActionMsg(
+        error
+          ? `Không thể xoá bài đăng: ${error.message}`
+          : 'Không thể xoá bài đăng: bạn chưa có quyền xoá bài của người khác. Hãy chạy file SQL "2026_fix_posts_admin_delete.sql".'
+      );
+    }
   };
 
   const postAnnouncement = async () => {
@@ -244,13 +611,19 @@ export default function AdminPage() {
   const filteredMembers = members.filter((m) => m.username.toLowerCase().includes(search.toLowerCase()));
   const sortedMembers = [...filteredMembers].sort((a, b) => ROLE_RANK[b.role] - ROLE_RANK[a.role]);
 
-  const tabs: { id: Tab; label: string; icon: typeof Shield }[] = [
+  const allTabs: { id: Tab; label: string; icon: typeof Shield }[] = [
     { id: 'dashboard', label: 'Tổng quan', icon: BarChart3 },
     { id: 'users', label: 'Thành viên', icon: Users },
     { id: 'posts', label: 'Kiểm duyệt', icon: FileText },
     { id: 'chat', label: 'Tin nhắn', icon: MessagesSquare },
+    { id: 'shop', label: 'Cửa hàng', icon: Store },
+    { id: 'tasks', label: 'Nhiệm vụ', icon: ListChecks },
     { id: 'announcements', label: 'Thông báo', icon: Megaphone },
+    { id: 'maintenance', label: 'Bảo trì', icon: Wrench },
+    { id: 'topup', label: 'Nạp tiền', icon: Coins },
   ];
+  // Mục "Nạp tiền" chỉ hiện với Sáng lập viên
+  const tabs = allTabs.filter((t) => t.id !== 'topup' || canTopup);
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
@@ -260,7 +633,7 @@ export default function AdminPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold anime-text-gradient">Bảng quản trị</h1>
-          <p className="text-slate-400 text-sm">Quản lý cộng đồng Anime social</p>
+          <p className="text-slate-400 text-sm">Quản lý cộng đồng Adino Social</p>
         </div>
       </div>
 
@@ -416,6 +789,12 @@ export default function AdminPage() {
         </div>
       ) : tab === 'posts' ? (
         <div className="space-y-4">
+          {postsActionMsg && (
+            <div className="rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 px-4 py-2.5 text-rose-600 dark:text-rose-400 text-sm flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" /> {postsActionMsg}
+              <button onClick={() => setPostsActionMsg('')} className="ml-auto text-rose-400 hover:text-rose-600">×</button>
+            </div>
+          )}
           {posts.length === 0 ? (
             <div className="anime-card rounded-2xl p-12 text-center">
               <FileText className="w-12 h-12 text-pink-300 mx-auto mb-4" />
@@ -482,7 +861,7 @@ export default function AdminPage() {
             </div>
           </div>
         </div>
-      ) : (
+      ) : tab === 'announcements' ? (
         <div className="space-y-4">
           <div className="anime-card rounded-2xl p-5">
             <h3 className="font-bold anime-text-gradient mb-1">Đăng thông báo</h3>
@@ -527,6 +906,420 @@ export default function AdminPage() {
               </div>
             ))}
           </div>
+        </div>
+      ) : tab === 'maintenance' ? (
+        <div className="space-y-4">
+          <div className="anime-card rounded-2xl p-5">
+            <div className="flex items-center gap-3 mb-1">
+              <h3 className="font-bold anime-text-gradient">Chế độ bảo trì</h3>
+              {maintEnabled && (
+                <span className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300 font-semibold">Đang BẬT</span>
+              )}
+            </div>
+            <p className="text-sm text-slate-400 mb-5">
+              Khi bật, chỉ tài khoản cấp <span className="font-medium text-slate-600 dark:text-fuchsia-200">Phó Admin trở lên</span> mới dùng được app — người dùng khác sẽ thấy màn hình "Đang bảo trì" ngay lập tức.
+            </p>
+
+            {maintActionMsg && (
+              <div className="mb-4 rounded-xl bg-cyan-50 dark:bg-cyan-500/10 border border-cyan-200 dark:border-cyan-500/30 px-4 py-2.5 text-cyan-700 dark:text-cyan-300 text-sm flex items-center gap-2">
+                {maintActionMsg}
+                <button onClick={() => setMaintActionMsg('')} className="ml-auto text-cyan-400 hover:text-cyan-600">×</button>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between px-4 py-3.5 rounded-xl bg-pink-50/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/15">
+                <div className="flex items-center gap-2.5">
+                  <Wrench className="w-4 h-4 text-slate-500 dark:text-fuchsia-200/60" />
+                  <span className="text-sm font-medium text-slate-700 dark:text-white">Bật chế độ bảo trì</span>
+                </div>
+                <button onClick={() => setMaintEnabled((v) => !v)}
+                  className={`relative w-11 rounded-full transition-colors ${maintEnabled ? 'bg-amber-500' : 'bg-pink-200 dark:bg-white/10'}`} style={{ height: 24 }}>
+                  <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-md transition-transform duration-300 ${maintEnabled ? 'translate-x-6' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 dark:text-fuchsia-200/60 mb-1.5 block">Thông báo hiển thị cho người dùng (tuỳ chọn)</label>
+                <textarea value={maintMessage} onChange={(e) => setMaintMessage(e.target.value)} rows={3}
+                  placeholder="Ví dụ: Chúng mình đang nâng cấp hệ thống, sẽ quay lại sau 30 phút nữa..."
+                  className="w-full px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 resize-none transition-all text-sm" />
+              </div>
+
+              <button onClick={saveMaintenance} disabled={savingMaint}
+                className="px-5 py-2.5 rounded-xl anime-btn-primary text-sm font-semibold disabled:opacity-50 flex items-center gap-2">
+                {savingMaint ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+                Lưu cài đặt
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : tab === 'shop' ? (
+        <div className="space-y-4">
+          {shopActionMsg && (
+            <div className="rounded-xl bg-cyan-50 dark:bg-cyan-500/10 border border-cyan-200 dark:border-cyan-500/30 px-4 py-2.5 text-cyan-700 dark:text-cyan-300 text-sm flex items-center gap-2">
+              {shopActionMsg}
+              <button onClick={() => setShopActionMsg('')} className="ml-auto text-cyan-400 hover:text-cyan-600">×</button>
+            </div>
+          )}
+
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            <button onClick={() => setShopSubTab('pending')}
+              className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1.5 whitespace-nowrap transition-all ${shopSubTab === 'pending' ? 'anime-btn-primary text-white' : 'anime-card text-slate-500 dark:text-fuchsia-200/60'}`}>
+              <Clock className="w-3.5 h-3.5" /> Chờ duyệt
+              {shopListings.some((l) => l.status === 'pending') && <span className="w-2 h-2 rounded-full bg-amber-500" />}
+            </button>
+            <button onClick={() => setShopSubTab('listings')}
+              className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1.5 whitespace-nowrap transition-all ${shopSubTab === 'listings' ? 'anime-btn-primary text-white' : 'anime-card text-slate-500 dark:text-fuchsia-200/60'}`}>
+              <Store className="w-3.5 h-3.5" /> Tất cả tin đăng
+            </button>
+            <button onClick={() => setShopSubTab('history')}
+              className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1.5 whitespace-nowrap transition-all ${shopSubTab === 'history' ? 'anime-btn-primary text-white' : 'anime-card text-slate-500 dark:text-fuchsia-200/60'}`}>
+              <ShoppingCart className="w-3.5 h-3.5" /> Lịch sử giao dịch
+            </button>
+          </div>
+
+          {shopSubTab === 'pending' ? (
+            (() => {
+              const pendingListings = shopListings.filter((l) => l.status === 'pending');
+              return pendingListings.length === 0 ? (
+                <div className="anime-card rounded-2xl p-12 text-center">
+                  <CheckCircle2 className="w-12 h-12 text-emerald-300 mx-auto mb-4" />
+                  <p className="text-slate-400">Không có tin đăng nào đang chờ duyệt 🎉</p>
+                </div>
+              ) : pendingListings.map((item) => {
+                const busy = reviewingListingId === item.id;
+                return (
+                  <div key={item.id} className="anime-card rounded-2xl p-4 space-y-3">
+                    <div className="flex items-start gap-3 flex-wrap">
+                      {item.image_url && <img src={item.image_url} alt="" className="w-16 h-16 rounded-xl object-cover shrink-0" />}
+                      <div className="flex items-center gap-2 min-w-[140px]">
+                        <Avatar profile={item.profiles ?? null} size={32} />
+                        <div>
+                          <p className="text-xs text-slate-400">Người đăng</p>
+                          <p className="text-sm font-medium text-slate-800 dark:text-white">{item.profiles?.username ?? 'Unknown'}</p>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-[160px]">
+                        <p className="text-sm font-semibold text-slate-800 dark:text-white">{item.title}</p>
+                        {item.description && <p className="text-xs text-slate-500 dark:text-fuchsia-200/60 line-clamp-2 mt-0.5">{item.description}</p>}
+                        <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-1"><Coins className="w-3 h-3" /> {item.price_coin.toLocaleString('vi-VN')} coin</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => approveListingItem(item.id)} disabled={busy}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
+                        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Duyệt (hiện công khai)
+                      </button>
+                      <button onClick={() => rejectListingItem(item.id)} disabled={busy}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-white/10 hover:opacity-80 text-slate-600 dark:text-slate-300 text-xs font-semibold disabled:opacity-50">
+                        <XIcon className="w-3.5 h-3.5" /> Từ chối
+                      </button>
+                    </div>
+                  </div>
+                );
+              });
+            })()
+          ) : shopSubTab === 'listings' ? (
+            shopListings.length === 0 ? (
+              <div className="anime-card rounded-2xl p-12 text-center">
+                <Store className="w-12 h-12 text-pink-300 mx-auto mb-4" />
+                <p className="text-slate-400">Chưa có tin đăng nào</p>
+              </div>
+            ) : shopListings.map((item) => {
+              const busy = removingListingId === item.id;
+              return (
+                <div key={item.id} className={`anime-card rounded-2xl p-4 flex items-center gap-3 flex-wrap ${item.status === 'sold' || item.status === 'removed' || item.status === 'rejected' ? 'opacity-60' : ''}`}>
+                  {item.image_url && <img src={item.image_url} alt="" className="w-14 h-14 rounded-xl object-cover shrink-0" />}
+                  <div className="flex items-center gap-2 min-w-[140px]">
+                    <Avatar profile={item.profiles ?? null} size={32} />
+                    <div>
+                      <p className="text-sm font-medium text-slate-800 dark:text-white">{item.profiles?.username ?? 'Unknown'}</p>
+                      <p className="text-xs text-slate-400">{new Date(item.created_at).toLocaleString('vi-VN')}</p>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-[160px]">
+                    <p className="text-sm font-semibold text-slate-800 dark:text-white line-clamp-1">{item.title}</p>
+                    <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1"><Coins className="w-3 h-3" /> {item.price_coin.toLocaleString('vi-VN')} coin</p>
+                  </div>
+                  {item.status === 'pending' && <span className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">Chờ duyệt</span>}
+                  {item.status === 'active' && <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">Đang bán</span>}
+                  {item.status === 'sold' && <span className="text-xs px-2.5 py-1 rounded-full bg-slate-200 dark:bg-white/10 text-slate-500">Đã bán</span>}
+                  {item.status === 'rejected' && <span className="text-xs px-2.5 py-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">Bị từ chối</span>}
+                  {item.status === 'removed' && <span className="text-xs px-2.5 py-1 rounded-full bg-slate-200 dark:bg-white/10 text-slate-500">Đã ẩn</span>}
+                  <button onClick={() => removeListing(item.id)} disabled={busy}
+                    className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300 hover:opacity-80 text-xs font-semibold disabled:opacity-50">
+                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Xoá
+                  </button>
+                </div>
+              );
+            })
+          ) : shopOrders.length === 0 ? (
+            <div className="anime-card rounded-2xl p-12 text-center">
+              <ShoppingCart className="w-12 h-12 text-pink-300 mx-auto mb-4" />
+              <p className="text-slate-400">Chưa có giao dịch nào</p>
+            </div>
+          ) : shopOrders.map((o) => (
+            <div key={o.id} className="anime-card rounded-2xl p-4 flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 min-w-[140px]">
+                <Avatar profile={o.buyer ?? null} size={28} />
+                <div>
+                  <p className="text-xs text-slate-400">Người mua</p>
+                  <p className="text-sm font-medium text-slate-800 dark:text-white">{o.buyer?.username ?? 'Unknown'}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 min-w-[140px]">
+                <Avatar profile={o.seller ?? null} size={28} />
+                <div>
+                  <p className="text-xs text-slate-400">Người bán</p>
+                  <p className="text-sm font-medium text-slate-800 dark:text-white">{o.seller?.username ?? 'Unknown'}</p>
+                </div>
+              </div>
+              <div className="flex-1 min-w-[140px]">
+                <p className="text-xs text-slate-400">Sản phẩm</p>
+                <p className="text-sm font-semibold text-slate-800 dark:text-white line-clamp-1">{o.shop_listings?.title ?? 'Sản phẩm'}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1"><Coins className="w-3.5 h-3.5" /> {o.price_coin.toLocaleString('vi-VN')}</p>
+                <p className="text-xs text-slate-400">{new Date(o.created_at).toLocaleString('vi-VN')}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : tab === 'tasks' ? (
+        <div className="space-y-4">
+          <div className="anime-card rounded-2xl p-5">
+            <h3 className="font-bold anime-text-gradient mb-1">Thêm nhiệm vụ mới</h3>
+            <p className="text-xs text-slate-400 mb-4">Người dùng bấm vào link nhiệm vụ rồi bấm nhận thưởng để nhận coin (nhận 1 lần duy nhất mỗi nhiệm vụ).</p>
+
+            {taskActionMsg && (
+              <div className="mb-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 px-4 py-2.5 text-rose-600 dark:text-rose-400 text-sm">{taskActionMsg}</div>
+            )}
+
+            <div className="space-y-3">
+              <input value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} placeholder="Tên nhiệm vụ (vd: Theo dõi Fanpage)"
+                className="w-full px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+              <textarea value={newTaskDesc} onChange={(e) => setNewTaskDesc(e.target.value)} rows={2} placeholder="Mô tả (tuỳ chọn)"
+                className="w-full px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 resize-none text-sm" />
+              <div className="grid sm:grid-cols-2 gap-3">
+                <input value={newTaskLink} onChange={(e) => setNewTaskLink(e.target.value)} placeholder="Link nhiệm vụ (https://...)"
+                  className="px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                <input value={newTaskReward} onChange={(e) => setNewTaskReward(e.target.value)} type="number" placeholder="Thưởng (coin)"
+                  className="px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+              </div>
+              <button onClick={addTask} disabled={!newTaskTitle.trim() || !newTaskLink.trim() || savingTask}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl anime-btn-primary text-sm font-semibold disabled:opacity-50">
+                {savingTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Thêm nhiệm vụ
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {taskList.length === 0 ? (
+              <div className="anime-card rounded-2xl p-12 text-center">
+                <ListChecks className="w-12 h-12 text-pink-300 mx-auto mb-4" />
+                <p className="text-slate-400">Chưa có nhiệm vụ nào</p>
+              </div>
+            ) : taskList.map((task) => (
+              <div key={task.id} className={`anime-card rounded-2xl p-4 flex items-center gap-3 flex-wrap ${!task.active ? 'opacity-50' : ''}`}>
+                <div className="flex-1 min-w-[180px]">
+                  <p className="font-medium text-slate-800 dark:text-white">{task.title}</p>
+                  <a href={task.link} target="_blank" rel="noopener noreferrer" className="text-xs text-pink-500 hover:underline flex items-center gap-1">
+                    <ExternalLink className="w-3 h-3" /> {task.link}
+                  </a>
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-1"><Coins className="w-3 h-3" /> {task.reward_coin.toLocaleString('vi-VN')} coin</p>
+                </div>
+                <button onClick={() => toggleTaskActive(task)}
+                  className="text-xs px-2.5 py-1 rounded-lg bg-pink-100 dark:bg-white/10 text-pink-600 dark:text-fuchsia-300 hover:opacity-80">
+                  {task.active ? 'Đang bật' : 'Đã tắt'}
+                </button>
+                <button onClick={() => removeTask(task.id)} className="text-slate-400 hover:text-rose-400 p-1.5">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : tab === 'topup' && !canTopup ? (
+        <div className="max-w-md mx-auto text-center py-16">
+          <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-8 h-8 text-slate-400" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-800 dark:text-white mb-2">Chỉ Sáng lập viên mới truy cập được</h2>
+          <p className="text-slate-400 text-sm">Mục Nạp tiền được giới hạn quyền truy cập cho tài khoản cấp Sáng lập viên.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {topupMsg && (
+            <div className="rounded-xl bg-cyan-50 dark:bg-cyan-500/10 border border-cyan-200 dark:border-cyan-500/30 px-4 py-2.5 text-cyan-700 dark:text-cyan-300 text-sm flex items-center gap-2">
+              {topupMsg}
+              <button onClick={() => setTopupMsg('')} className="ml-auto text-cyan-400 hover:text-cyan-600">×</button>
+            </div>
+          )}
+
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {([
+              { id: 'orders', label: 'Đơn nạp tiền' },
+              { id: 'packages', label: 'Gói nạp' },
+              { id: 'prices', label: 'Giá cấp bậc' },
+              { id: 'bank', label: 'Ngân hàng' },
+            ] as const).map((t) => (
+              <button key={t.id} onClick={() => setTopupTab(t.id)}
+                className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all ${topupTab === t.id ? 'anime-btn-primary text-white' : 'anime-card text-slate-500 dark:text-fuchsia-200/60 hover:text-pink-500'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {topupTab === 'orders' && (
+            <div className="space-y-3">
+              {orders.length === 0 ? (
+                <div className="anime-card rounded-2xl p-12 text-center">
+                  <Coins className="w-12 h-12 text-pink-300 mx-auto mb-4" />
+                  <p className="text-slate-400">Chưa có đơn nạp tiền nào</p>
+                </div>
+              ) : orders.map((o) => {
+                const busy = processingOrderId === o.id;
+                return (
+                  <div key={o.id} className="anime-card rounded-2xl p-4 flex items-center gap-3 flex-wrap">
+                    <Avatar profile={o.profiles ?? null} size={36} />
+                    <div className="flex-1 min-w-[160px]">
+                      <p className="text-sm font-medium text-slate-800 dark:text-white">{o.profiles?.username ?? 'Unknown'}</p>
+                      <p className="text-xs text-slate-400">{new Date(o.created_at).toLocaleString('vi-VN')}</p>
+                    </div>
+                    <div className="text-sm text-right">
+                      <p className="font-semibold text-slate-800 dark:text-white">{o.amount_vnd.toLocaleString('vi-VN')}đ</p>
+                      <p className="text-emerald-500 text-xs">+{o.coins.toLocaleString('vi-VN')} coin</p>
+                    </div>
+                    <span className="text-xs font-mono px-2 py-1 rounded-lg bg-pink-100 dark:bg-white/10 text-pink-600 dark:text-fuchsia-300">{orderMemo(o.id)}</span>
+                    {o.status === 'pending' ? (
+                      <div className="flex items-center gap-2 ml-auto">
+                        <button onClick={() => confirmOrder(o.id)} disabled={busy}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
+                          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Xác nhận
+                        </button>
+                        <button onClick={() => cancelOrder(o.id)} disabled={busy}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-white/10 hover:opacity-80 text-slate-600 dark:text-slate-300 text-xs font-semibold disabled:opacity-50">
+                          <XIcon className="w-3.5 h-3.5" /> Huỷ
+                        </button>
+                      </div>
+                    ) : o.status === 'completed' ? (
+                      <span className="ml-auto text-xs px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Hoàn tất</span>
+                    ) : (
+                      <span className="ml-auto text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 dark:bg-white/10 dark:text-slate-400 flex items-center gap-1"><XCircle className="w-3 h-3" /> Đã huỷ</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {topupTab === 'packages' && (
+            <div className="space-y-4">
+              <div className="anime-card rounded-2xl p-5">
+                <h3 className="font-bold anime-text-gradient mb-4">Thêm gói nạp mới</h3>
+                <div className="grid sm:grid-cols-3 gap-3 mb-3">
+                  <input value={newPkgName} onChange={(e) => setNewPkgName(e.target.value)} placeholder="Tên gói"
+                    className="px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                  <input value={newPkgAmount} onChange={(e) => setNewPkgAmount(e.target.value)} type="number" placeholder="Số tiền (VNĐ)"
+                    className="px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                  <input value={newPkgCoins} onChange={(e) => setNewPkgCoins(e.target.value)} type="number" placeholder="Số coin nhận được"
+                    className="px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                </div>
+                <button onClick={addPackage} disabled={savingPkg}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl anime-btn-primary text-sm font-semibold disabled:opacity-50">
+                  {savingPkg ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Thêm gói
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {coinPackages.map((pkg) => (
+                  <div key={pkg.id} className={`anime-card rounded-2xl p-4 flex items-center gap-3 ${!pkg.active ? 'opacity-50' : ''}`}>
+                    <div className="flex-1">
+                      <p className="font-medium text-slate-800 dark:text-white">{pkg.name}</p>
+                      <p className="text-xs text-slate-400">{pkg.amount_vnd.toLocaleString('vi-VN')}đ → +{pkg.coins.toLocaleString('vi-VN')} coin</p>
+                    </div>
+                    <button onClick={() => togglePackageActive(pkg)}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-pink-100 dark:bg-white/10 text-pink-600 dark:text-fuchsia-300 hover:opacity-80">
+                      {pkg.active ? 'Đang bán' : 'Đã ẩn'}
+                    </button>
+                    <button onClick={() => removePackage(pkg.id)} className="text-slate-400 hover:text-rose-400 p-1.5">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {topupTab === 'prices' && (
+            <div className="space-y-4">
+              <div className="anime-card rounded-2xl p-5">
+                <h3 className="font-bold anime-text-gradient mb-1">Thêm / sửa giá cấp bậc</h3>
+                <p className="text-xs text-slate-400 mb-4">Không giới hạn cấp bậc theo cấu hình bạn đã chọn — hãy cân nhắc kỹ trước khi mở bán các cấp có quyền quản trị.</p>
+                <div className="grid sm:grid-cols-3 gap-3 mb-3">
+                  <select value={newPriceRole} onChange={(e) => setNewPriceRole(e.target.value)}
+                    className="px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white outline-none focus:border-pink-500 text-sm">
+                    <option value="">-- Chọn cấp bậc --</option>
+                    {ALL_ROLES.filter((r) => r !== 'Nô lệ').map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                  <input value={newPriceCost} onChange={(e) => setNewPriceCost(e.target.value)} type="number" placeholder="Giá (coin)"
+                    className="px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                  <button onClick={addOrUpdatePrice} disabled={savingPrice || !newPriceRole}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl anime-btn-primary text-sm font-semibold disabled:opacity-50">
+                    {savingPrice ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Lưu
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {rolePrices.map((rp) => {
+                  const colors = ROLE_COLORS[rp.role];
+                  return (
+                    <div key={rp.role} className={`anime-card rounded-2xl p-4 flex items-center gap-3 ${!rp.enabled ? 'opacity-50' : ''}`}>
+                      <span className={`text-sm px-2.5 py-1 rounded-full ${colors.badge}`}>{rp.role}</span>
+                      <span className="text-sm font-semibold text-slate-700 dark:text-white flex-1">{rp.coin_cost.toLocaleString('vi-VN')} coin</span>
+                      <button onClick={() => togglePriceEnabled(rp)}
+                        className="text-xs px-2.5 py-1 rounded-lg bg-pink-100 dark:bg-white/10 text-pink-600 dark:text-fuchsia-300 hover:opacity-80">
+                        {rp.enabled ? 'Đang mở bán' : 'Đã tắt'}
+                      </button>
+                      <button onClick={() => removePrice(rp.role)} className="text-slate-400 hover:text-rose-400 p-1.5">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {topupTab === 'bank' && (
+            <div className="anime-card rounded-2xl p-5">
+              <h3 className="font-bold anime-text-gradient mb-1 flex items-center gap-2"><Landmark className="w-4 h-4" /> Tài khoản ngân hàng nhận tiền</h3>
+              <p className="text-xs text-slate-400 mb-4">Dùng để tạo mã QR VietQR cho người dùng chuyển khoản.</p>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-medium text-slate-500 dark:text-fuchsia-200/60 mb-1 block">Mã BIN ngân hàng (VietQR)</label>
+                  <input value={bankBin} onChange={(e) => setBankBin(e.target.value)} placeholder="Ví dụ: 970436 (Vietcombank)"
+                    className="w-full px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-500 dark:text-fuchsia-200/60 mb-1 block">Số tài khoản</label>
+                  <input value={bankAccountNo} onChange={(e) => setBankAccountNo(e.target.value)} placeholder="0123456789"
+                    className="w-full px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-500 dark:text-fuchsia-200/60 mb-1 block">Tên chủ tài khoản (không dấu)</label>
+                  <input value={bankAccountName} onChange={(e) => setBankAccountName(e.target.value.toUpperCase())} placeholder="NGUYEN VAN A"
+                    className="w-full px-4 py-2.5 rounded-xl bg-white/60 dark:bg-white/5 border border-pink-200 dark:border-fuchsia-500/20 text-slate-800 dark:text-white placeholder-slate-400 outline-none focus:border-pink-500 text-sm" />
+                </div>
+                <button onClick={saveBank} disabled={savingBank}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl anime-btn-primary text-sm font-semibold disabled:opacity-50">
+                  {savingBank ? <Loader2 className="w-4 h-4 animate-spin" /> : <Landmark className="w-4 h-4" />} Lưu thông tin
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

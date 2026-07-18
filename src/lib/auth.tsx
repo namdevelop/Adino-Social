@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { supabase } from './supabase';
-import type { Profile } from './types';
+import { getAppSettings } from './settings';
+import type { Profile, AppSettings } from './types';
 
 const AuthContext = createContext<{
   session: any | null;
@@ -10,6 +11,8 @@ const AuthContext = createContext<{
   clearBanNotice: () => void;
   refreshProfile: () => Promise<void>;
   signOut: () => Promise<void>;
+  maintenance: AppSettings | null;
+  maintenanceLoading: boolean;
 }>({
   session: null,
   profile: null,
@@ -18,6 +21,8 @@ const AuthContext = createContext<{
   clearBanNotice: () => {},
   refreshProfile: async () => {},
   signOut: async () => {},
+  maintenance: null,
+  maintenanceLoading: true,
 });
 
 const BAN_MESSAGE = 'Tài khoản của bạn đã bị khoá vĩnh viễn. Vui lòng liên hệ quản trị viên nếu có thắc mắc.';
@@ -27,6 +32,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [banNotice, setBanNotice] = useState('');
+  const [maintenance, setMaintenance] = useState<AppSettings | null>(null);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(true);
 
   const clearBanNotice = () => setBanNotice('');
 
@@ -95,13 +102,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { supabase.removeChannel(channel); };
   }, [session?.user?.id]);
 
+  // Tải trạng thái bảo trì hệ thống (không phụ thuộc đăng nhập) + lắng nghe
+  // realtime để bật/tắt bảo trì có hiệu lực ngay lập tức cho mọi người.
+  useEffect(() => {
+    let active = true;
+    getAppSettings()
+      .then((data) => { if (active) { setMaintenance(data); setMaintenanceLoading(false); } })
+      .catch(() => { if (active) setMaintenanceLoading(false); });
+
+    const channel = supabase
+      .channel('app-settings-realtime')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'app_settings' }, (payload) => {
+        setMaintenance(payload.new as AppSettings);
+      })
+      .subscribe();
+
+    return () => { active = false; supabase.removeChannel(channel); };
+  }, []);
+
   const signOut = async () => {
     await supabase.auth.signOut();
     setProfile(null);
   };
 
   return (
-    <AuthContext.Provider value={{ session, profile, loading, banNotice, clearBanNotice, refreshProfile, signOut }}>
+    <AuthContext.Provider value={{
+      session, profile, loading, banNotice, clearBanNotice, refreshProfile, signOut,
+      maintenance, maintenanceLoading,
+    }}>
       {children}
     </AuthContext.Provider>
   );
